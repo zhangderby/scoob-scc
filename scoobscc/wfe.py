@@ -1,5 +1,5 @@
 from .math_module import xp, xcipy, ensure_np_array
-from scoob_llowfsc import utils
+from scoobscc import utils
 
 import numpy as np
 import scipy
@@ -39,7 +39,7 @@ def generate_wfe(
     wfe_amp = wfe_amp*1e9 + 1
 
     Zs = poppy.zernike.arbitrary_basis(circ, nterms=remove_opd_modes, outside=0)
-    Zc_opd = lstsq(Zs, wfe_opd)
+    Zc_opd = utils.lstsq(Zs, wfe_opd)
     for i in range(remove_opd_modes):
         wfe_opd -= Zc_opd[i] * Zs[i]
     wfe_rms = xp.sqrt( xp.mean( xp.square( wfe_opd[bmask] )))

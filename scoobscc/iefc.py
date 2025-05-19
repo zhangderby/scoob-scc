@@ -1,6 +1,6 @@
 from .math_module import xp, xcipy, ensure_np_array
-from scoob_llowfsc import utils
-from scoob_llowfsc import scoob_interface as scoobi
+from scoobscc import utils
+from scoobscc import scoob_interface as scoobi
 
 import numpy as np
 import astropy.units as u

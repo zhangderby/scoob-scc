@@ -1,5 +1,5 @@
 from .math_module import xp, xcipy, ensure_np_array
-from scoob_llowfsc import utils, dm, props
+from scoobscc import utils, dm, props
 
 import numpy as np
 import astropy.units as u
@@ -296,9 +296,9 @@ class single():
             E_LP = copy.copy(E_DM)
 
         POSTFPM_WFE = self.POSTFPM_AMP * xp.exp(1j * 2*xp.pi/self.wavelength * self.POSTFPM_OPD )
-        E_LP =  E_LP * utils.pad_or_crop(POSTFPM_WFE, E_LP.shape[0])
+        E_LS =  E_LP * utils.pad_or_crop(POSTFPM_WFE, E_LP.shape[0])
 
-        E_LS = E_LP * utils.pad_or_crop(self.LYOT, E_LP.shape[0]).astype(complex)
+        E_LS = E_LS * utils.pad_or_crop(self.LYOT, E_LP.shape[0]).astype(complex)
 
         E_CAMSCI = props.mft_forward(E_LS, self.npix*self.lyot_ratio, self.ncamsci, self.camsci_pxscl_lamD)
         if self.camsci_shear is not None: # shift the CAMLO image to simulate detector lateral shift
