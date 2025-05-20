@@ -29,8 +29,8 @@ class single():
         self.dm_beam_diam = 9.1e-3 # as measured in the Fresnel model
         self.lyot_pupil_diam = 9.1e-3
         self.lyot_diam = 8.6e-3
-        self.pinhole_diam = 9.1e-3 * 0.03
-        self.pinhole_sep = 9.1e-3 * 0.6
+        self.pinhole_diam = 300e-6
+        self.pinhole_sep = 6e-3
         self.lyot_ratio = self.lyot_diam/self.lyot_pupil_diam
         self.rls_diam = 25.4e-3
         self.d_oap_ls = 150e-3
