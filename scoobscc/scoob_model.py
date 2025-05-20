@@ -39,7 +39,7 @@ class single():
         self.llowfsc_fnum = self.llowfsc_fl/self.lyot_diam
         self.llowfsc_defocus = 2.75e-3
         self.camsci_pxscl = 4.6e-6
-        self.camsci_pxscl_lamDc = 0.307
+        self.camsci_pxscl_lamDc = 0.307 / 2 # divide by 2 for no binning, without division it's bin 2 mode
         self.camlo_pxscl = 3.76e-6
         self.camlo_pxscl_lamDc = self.camlo_pxscl / (self.llowfsc_fl * self.wavelength_c / self.lyot_pupil_diam)
 
