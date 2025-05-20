@@ -29,6 +29,8 @@ class single():
         self.dm_beam_diam = 9.1e-3 # as measured in the Fresnel model
         self.lyot_pupil_diam = 9.1e-3
         self.lyot_diam = 8.6e-3
+        self.pinhole_diam = 9.1e-3 * 0.03
+        self.pinhole_sep = 9.1e-3 * 0.6
         self.lyot_ratio = self.lyot_diam/self.lyot_pupil_diam
         self.rls_diam = 25.4e-3
         self.d_oap_ls = 150e-3
@@ -65,8 +67,11 @@ class single():
 
         pwf_rls = poppy.FresnelWavefront(beam_radius=self.dm_beam_diam/2*u.m, npix=self.npix, oversample=self.rls_oversample)
         rls_ap = poppy.CircularAperture(radius=self.rls_diam/2*u.m).get_transmission(pwf_rls)
-        self.RLS = rls_ap - utils.pad_or_crop( self.LYOTSTOP, self.Nrls)
+        self.RLS = rls_ap - utils.pad_or_crop(self.LYOTSTOP, self.Nrls)
         rls_ap = 0
+
+        self.PINHOLE = poppy.CircularAperture(radius=self.pinhole_diam/2*u.m, shift_x=self.pinhole_sep*u.m).get_transmission(pwf_rls)
+        self.SCCSTOP = utils.pad_or_crop(self.LYOTSTOP, self.Nrls) + self.PINHOLE
 
         self.OAP_AP = poppy.CircularAperture(radius=15*u.mm/2).get_transmission(pwf_rls)
         self.use_camlo = False
