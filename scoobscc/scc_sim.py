@@ -7,38 +7,67 @@ import time
 import copy
 from IPython.display import display, clear_output
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, CenteredNorm, Normalize
+from matplotlib.colors import LogNorm, CenteredNorm, Normalize, SymLogNorm
+import matplotlib.pyplot as plt
 
 # def take_measurement(system_interface, probe_cube, probe_amplitude, return_all=False, pca_modes=None):
-def take_measurement(I, probe_cube, probe_amplitude, channel=3, plot=False):
-    N_probes = len(probe_cube)
-    
-    diff_ims = []
-    ims = []
-    for i in range(N_probes):
-        probe = probe_cube[i]
+def take_measurement(I, scc_reference, shift, diam_window, plot=False):
 
-        I.add_dm(probe_amplitude * probe, channel=channel) # add positive probe
-        im_pos = I.snap_camsci()
-        I.add_dm(-probe_amplitude * probe, channel=channel) # remove positive probe
-        I.add_dm(-probe_amplitude * probe, channel=channel) # add negative probe
-        im_neg = I.snap_camsci()
-        I.add_dm(probe_amplitude*probe, channel=channel) # remove negative probe
+    I.LYOT = I.SCCSTOP
 
-        diff_ims.append((im_pos - im_neg) / (2*probe_amplitude))
+    image_mod = I.snap_camsci()
 
-    diff_ims = xp.array(diff_ims)
+    I.LYOT = I.LYOTSTOP
+
+    image_unmod = I.snap_camsci()
+
+    fft_mod = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(image_mod), norm='ortho'))
+    fft_unmod = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(image_unmod), norm='ortho'))
+    fft_diff = fft_mod - fft_unmod
 
     if plot:
-        for i, diff_im in enumerate(diff_ims):
-            utils.imshow(
-                [probe_cube[i], diff_im], 
-                titles=[f'Probe Command {i+1}', 'Difference Image'], 
-                pxscls=[None, I.camsci_pxscl_lamDc],
-                cmaps=['viridis', 'magma'],
-            )
-    
-    return diff_ims
+        plt.figure(figsize=(15, 4))
+        plt.subplot(131)
+        plt.imshow(xp.abs(fft_mod).get(), norm='log')
+        plt.subplot(132)
+        plt.imshow(xp.abs(fft_unmod).get(), norm='log')
+        plt.subplot(133)
+        plt.imshow(xp.abs(fft_diff).get(), norm='log')
+
+    fft_shifted = xcipy.ndimage.shift(fft_diff, (0, shift))
+
+    x, y = xp.meshgrid(xp.linspace(-1, 1, fft_shifted.shape[0]), xp.linspace(-1, 1, fft_shifted.shape[0]))
+    r = xp.sqrt(x ** 2 + y ** 2)
+    mask = r < diam_window
+
+    fft_masked = fft_shifted * mask
+
+    if plot:
+        plt.figure(figsize=(10, 4))
+        plt.subplot(121)
+        plt.imshow(xp.abs(fft_shifted).get(), norm='log')
+        plt.subplot(122)
+        plt.imshow(xp.abs(fft_masked).get(), norm='log')
+
+    estimate = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(fft_masked), norm='ortho'))
+    estimate /= np.sqrt(scc_reference)
+
+    if plot:
+        plt.figure(figsize=(15, 4))
+        plt.subplot(131)
+        plt.imshow(xp.abs(estimate).get() ** 2, cmap='magma', norm='log', vmin=1e-9, vmax=1e-4)
+        plt.colorbar(fraction=0.046, pad=0.04)
+        plt.title('Estimate')
+        plt.subplot(132)
+        plt.imshow(image_unmod.get(), cmap='magma', norm='log', vmin=1e-9, vmax=1e-4)
+        plt.colorbar(fraction=0.046, pad=0.04)
+        plt.title('Truth')
+        plt.subplot(133)
+        plt.imshow(xp.abs(estimate).get() ** 2 - image_unmod.get(), cmap='magma', norm='log', vmin=1e-9, vmax=1e-4)
+        plt.colorbar(fraction=0.046, pad=0.04)
+        plt.title('Difference')
+
+    return estimate
     
 def calibrate(
         I, 
