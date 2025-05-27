@@ -72,78 +72,54 @@ def take_measurement(I, scc_reference, shift, diam_window, plot=False):
 def calibrate(
         I, 
         control_mask, 
-        probe_amplitude, 
-        probe_modes, 
         calibration_amplitude, 
         calibration_modes, 
+        scc_reference,
+        shift,
+        diam_window,
         channel=3,
-        scale_factors=None, 
-        plot_responses=False, 
+        return_full_response=False,
     ):
-    print('Calibrating iEFC...')
-    
-    Nprobes = probe_modes.shape[0]
+
+    print('Calibrating Jacobian...')
+
+    Nmask = int(control_mask.sum())
     Nmodes = calibration_modes.shape[0]
+    calib_amps = xp.array([-calibration_amplitude, calibration_amplitude])
 
-    response_matrix = []
-    calib_amps = []
-    response_cube = []
-    
-    # Loop through all modes that you want to control
+    response_matrix = xp.zeros((Nmask, Nmodes), dtype=xp.complex128)
+
+    if return_full_response:
+        response_matrix_full = xp.zeros((I.ncamsci ** 2, Nmodes), dtype=xp.complex128)
+
     start = time.time()
-    for ci, calibration_mode in enumerate(calibration_modes):
+    for i, mode in enumerate(calibration_modes):
+
         response = 0
-        for s in [-1, 1]: # We need a + and - probe to estimate the jacobian
-            dm_mode = calibration_mode.reshape(I.Nact, I.Nact)
-            calib_amp = calibration_amplitude * scale_factors[ci] if scale_factors is not None else calibration_amplitude
 
-            # Add the mode to the DMs
-            I.add_dm(s * calib_amp * dm_mode, channel=channel)
-            
-            # Compute reponse with difference images of probes
-            diff_ims = take_measurement(I, probe_modes, probe_amplitude, channel=channel)
-            calib_amps.append(calib_amp)
-            response += s * diff_ims.reshape(Nprobes, I.ncamsci**2) / (2 * calib_amp)
-            
-            # Remove the mode form the DMs
-            I.add_dm(-s * calib_amp * dm_mode, channel=channel) # remove the mode
+        for amp in calib_amps:
+
+            dm_command = mode.reshape(I.Nact, I.Nact)
+
+            I.add_dm(amp * dm_command, channel=channel)
+
+            estimate = take_measurement(I, scc_reference, shift, diam_window, plot=False)
+            response += amp * estimate.ravel() / (2 * xp.var(calib_amps))
+
+            I.add_dm(-amp * dm_command, channel=channel)
+
+        response_matrix[:, i] = response[control_mask.ravel()]
         
-        print(f"\tCalibrated mode {ci+1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
+        if return_full_response:
+            response_matrix_full[:, i] = response
+
+        print(f"\tCalibrated mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
         print("\r", end="")
-        
-        if probe_modes.shape[0]==2:
-            response_matrix.append( 
-                xp.concatenate([response[0, control_mask.ravel()],
-                                response[1, control_mask.ravel()]]) 
-            )
-        elif probe_modes.shape[0]==3: # if 3 probes are being used
-            response_matrix.append( 
-                xp.concatenate([response[0, control_mask.ravel()], 
-                                response[1, control_mask.ravel()],
-                                response[2, control_mask.ravel()]]) 
-                )
-        
-        response_cube.append(response)
-    print('\nCalibration complete.')
 
-    response_matrix = xp.array(response_matrix).T # this is the response matrix to be inverted
-    response_cube = xp.array(response_cube)
-    
-    if plot_responses:
-        dm_response_map = xp.sqrt(xp.mean(xp.square(response_matrix.dot(calibration_modes.reshape(Nmodes, -1))), axis=0))
-        dm_response_map = dm_response_map.reshape(I.Nact,I.Nact) / xp.max(dm_response_map)
-
-        fp_response_map = xp.sqrt( xp.mean( xp.abs(response_cube), axis=(0,1))).reshape(I.ncamsci, I.ncamsci)
-        fp_response_map = fp_response_map / xp.max(fp_response_map)
-        utils.imshow(
-            [dm_response_map, fp_response_map],
-            titles=['DM RMS Actuator Responses', 'Focal Plane Response'], 
-            norms=[LogNorm(1e-2), None],
-            pxscls=[None, I.camsci_pxscl_lamDc], 
-            cmaps=['plasma', 'magma'],
-        )
-            
-    return response_matrix, response_cube
+    if return_full_response:
+        return response_matrix, response_matrix_full
+    else:
+        return response_matrix
     
 def run(I, 
         data,
