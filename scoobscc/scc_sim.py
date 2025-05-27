@@ -87,10 +87,10 @@ def calibrate(
     Nmodes = calibration_modes.shape[0]
     calib_amps = xp.array([-calibration_amplitude, calibration_amplitude])
 
-    response_matrix = xp.zeros((Nmask, Nmodes), dtype=xp.complex128)
+    response_matrix = xp.zeros((2 * Nmask, Nmodes))
 
     if return_full_response:
-        response_matrix_full = xp.zeros((I.ncamsci ** 2, Nmodes), dtype=xp.complex128)
+        response_matrix_full = xp.zeros((2 * I.ncamsci ** 2, Nmodes))
 
     start = time.time()
     for i, mode in enumerate(calibration_modes):
@@ -104,14 +104,16 @@ def calibrate(
             I.add_dm(amp * dm_command, channel=channel)
 
             estimate = take_measurement(I, scc_reference, shift, diam_window, plot=False)
-            response += amp * estimate.ravel() / (2 * xp.var(calib_amps))
+            response += amp * estimate / (2 * xp.var(calib_amps))
 
             I.add_dm(-amp * dm_command, channel=channel)
 
-        response_matrix[:, i] = response[control_mask.ravel()]
+        response_matrix[::2, i] = response[control_mask].ravel().real
+        response_matrix[1::2, i] = response[control_mask].ravel().imag
         
         if return_full_response:
-            response_matrix_full[:, i] = response
+            response_matrix_full[::2, i] = response.ravel().real
+            response_matrix_full[1::2, i] = response.ravel().imag
 
         print(f"\tCalibrated mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
         print("\r", end="")
@@ -124,60 +126,49 @@ def calibrate(
 def run(I, 
         data,
         control_matrix,
-        probe_modes, probe_amplitude, 
         calibration_modes,
         control_mask,
+        scc_reference,
+        shift,
+        diam_window,
         channel=3,
         num_iterations=3,
         gain=0.75, 
         leakage=0.0,
-        plot_current=True,
-        plot_all=False,
-        vmin=1e-9,
-        plot_probes=False,
+        plot=False,
     ):
     
-    print('Running iEFC...')
-    start = time.time()
-    starting_itr = len(data['images'])
+    print('Running EFC...')
 
     Nmodes = calibration_modes.shape[0]
-    modal_matrix = calibration_modes.reshape(Nmodes, -1)
+    Nmask = int(control_mask.sum())
 
-    total_command = copy.copy(data['commands'][-1]) if len(data['commands'])>0 else xp.zeros((I.Nact,I.Nact))
+    modes = calibration_modes.reshape(Nmodes, -1)
+
+    command = copy.copy(data['commands'][-1])
 
     for i in range(num_iterations):
-        print(f"\tClosed-loop iteration {i+starting_itr} / {num_iterations+starting_itr-1}")
-        diff_ims = take_measurement(I, probe_modes, probe_amplitude, channel=channel, plot=plot_probes,)
-        measurement_vector = diff_ims[:, control_mask].ravel()
+        print(f"\tIteration {i + 1} / {num_iterations}")
 
-        modal_coeff = -control_matrix.dot(measurement_vector)
+        estimate_vector = xp.zeros(2 * Nmask)
 
-        del_command = gain * modal_matrix.T.dot(modal_coeff).reshape(I.Nact,I.Nact)
-        total_command = (1.0 - leakage)*total_command + del_command
-        I.set_dm(total_command, channel=channel)
+        estimate = take_measurement(I=I, scc_reference=scc_reference, shift=shift, diam_window=diam_window)
+        estimate_vector[::2] = estimate[control_mask].ravel().real
+        estimate_vector[1::2] = estimate[control_mask].ravel().imag
 
-        image_ni = I.snap_camsci()
-        mean_ni = xp.mean(image_ni[control_mask])
+        del_modes = control_matrix.dot(estimate_vector)
 
-        data['images'].append(copy.copy(image_ni))
-        data['contrasts'].append(copy.copy(mean_ni))
-        data['commands'].append(copy.copy(total_command))
-        data['del_commands'].append(copy.copy(del_command))
-    
-        if plot_current: 
-            if not plot_all: clear_output(wait=True)
-            utils.imshow(
-                [del_command, total_command, image_ni], 
-                titles=[f'Iteration {starting_itr + i:d}: $\delta$DM', 
-                        'Total DM Command', 
-                        f'Normalized Image\nMean Contrast = {mean_ni:.3e}'],
-                cmaps=['viridis', 'viridis', 'magma'],
-                pxscls=[None, None, I.camsci_pxscl_lamDc],
-                norms=[CenteredNorm(), None, LogNorm(vmin=vmin)],
-            )
-    
-    print('Closed loop for given control matrix completed in {:.3f}s.'.format(time.time()-start))
+        del_command = gain * del_modes.dot(modes).reshape(I.Nact, I.Nact)
+
+        command = (1.0 - leakage) * command - del_command
+
+        I.set_dm(command, channel=channel)
+
+        image = I.snap_camsci()
+
+        data['images'].append(copy.copy(image))
+        data['commands'].append(copy.copy(command))
+
     return data
 
 def compute_hadamard_scale_factors(had_modes, scale_exp=1/6, scale_thresh=4, iwa=2.5, owa=13, oversamp=4, plot=False):
