@@ -54,12 +54,12 @@ def move_block_out(client, delay=2):
     time.sleep(delay)
 
 def set_fib_atten(value, client, delay=0.1):
-    client['fiberatten.atten.target'] = value
+    client['fiberatten.attenuation.target'] = value
     time.sleep(delay)
     print(f'Set the fiber attenuation to {value:.1f}')
 
 def get_fib_atten(client,):
-    fib_atten = client['fiberatten.atten.current']
+    fib_atten = client['fiberatten.attenuation.current']
     return fib_atten
 
 # CAMERA Functions
