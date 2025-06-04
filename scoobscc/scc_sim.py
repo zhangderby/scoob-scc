@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, CenteredNorm, Normalize, SymLogNorm
 import matplotlib.pyplot as plt
 
-# def take_measurement(system_interface, probe_cube, probe_amplitude, return_all=False, pca_modes=None):
+
 def take_measurement(I, scc_reference, shift, diam_window, plot=False):
 
     I.LYOT = I.SCCSTOP
@@ -68,6 +68,113 @@ def take_measurement(I, scc_reference, shift, diam_window, plot=False):
         plt.title('Difference')
 
     return estimate
+
+
+def sussy_calibrate(
+        I, 
+        control_mask, 
+        calibration_amplitude, 
+        calibration_modes, 
+        scc_reference,
+        shift,
+        diam_window,
+        channel=3,
+        return_full_response=False,
+    ):
+
+    print('Calibrating Jacobian...')
+
+    Nmask = int(control_mask.sum())
+    Nmodes = calibration_modes.shape[0]
+    calib_amps = xp.array([-calibration_amplitude, calibration_amplitude])
+
+    ims_mod = xp.zeros((I.ncamsci, I.ncamsci, Nmodes, 2))
+    ims_unmod = xp.zeros((I.ncamsci, I.ncamsci, Nmodes, 2))
+
+    start = time.time()
+
+    I.LYOT = I.SCCSTOP
+
+    for i, mode in enumerate(calibration_modes):
+
+        for j, amp in enumerate(calib_amps):
+
+            dm_command = mode.reshape(I.Nact, I.Nact)
+
+            I.add_dm(amp * dm_command, channel=channel)
+
+            im = I.snap_camsci()
+            ims_mod[:, :, i, j] = im
+
+            I.add_dm(-amp * dm_command, channel=channel)
+
+        print(f"\tSnapped modulated images of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
+        print("\r", end="")
+
+    I.LYOT = I.LYOTSTOP
+
+    for i, mode in enumerate(calibration_modes):
+
+        for j, amp in enumerate(calib_amps):
+
+            dm_command = mode.reshape(I.Nact, I.Nact)
+
+            I.add_dm(amp * dm_command, channel=channel)
+
+            im = I.snap_camsci()
+            ims_unmod[:, :, i, j] = im
+
+            I.add_dm(-amp * dm_command, channel=channel)
+
+        print(f"\tSnapped unmodulated images of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
+        print("\r", end="")
+
+    response_matrix = xp.zeros((2 * Nmask, Nmodes))
+
+    if return_full_response:
+        response_matrix_full = xp.zeros((2 * I.ncamsci ** 2, Nmodes))
+
+    for i in range(Nmodes):
+
+        response = 0
+
+        for j, amp in enumerate(calib_amps):
+
+            image_mod = ims_mod[:, :, i, j]
+            image_unmod = ims_unmod[:, :, i, j]
+
+            fft_mod = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(image_mod), norm='ortho'))
+            fft_unmod = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(image_unmod), norm='ortho'))
+            fft_diff = fft_mod - fft_unmod
+
+            fft_shifted = xcipy.ndimage.shift(fft_diff, (0, shift))
+
+            x, y = xp.meshgrid(xp.linspace(-1, 1, fft_shifted.shape[0]), xp.linspace(-1, 1, fft_shifted.shape[0]))
+            r = xp.sqrt(x ** 2 + y ** 2)
+            mask = r < diam_window
+
+            fft_masked = fft_shifted * mask
+
+            estimate = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(fft_masked), norm='ortho'))
+            estimate /= np.sqrt(scc_reference)
+
+            response += amp * estimate / (2 * xp.var(calib_amps)) 
+
+        response_matrix[::2, i] = response[control_mask].ravel().real
+        response_matrix[1::2, i] = response[control_mask].ravel().imag
+        
+        if return_full_response:
+            response_matrix_full[::2, i] = response.ravel().real
+            response_matrix_full[1::2, i] = response.ravel().imag
+
+        print(f"\tCalculated response of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
+        print("\r", end="")
+    
+    if return_full_response:
+        return response_matrix, response_matrix_full
+    else:
+        return response_matrix
+    
     
 def calibrate(
         I, 
