@@ -114,7 +114,7 @@ def get_im_params(client0, client, cam_name='camsci'):
     client0.wait_for_properties([f'{cam_name}.exptime', f'{cam_name}.emgain', ])
     exp_time = client[f'{cam_name}.exptime.target']
     gain = client[f'{cam_name}.emgain.target']
-    fib_atten = client['fiberatten.atten.target']
+    fib_atten = client['fiberatten.attenuation.target']
 
     im_params = {
         'texp':exp_time,
