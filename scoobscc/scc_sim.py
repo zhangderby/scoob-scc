@@ -50,7 +50,11 @@ def take_measurement(I, scc_reference, shift, diam_window, plot=False):
         plt.imshow(xp.abs(fft_masked).get(), norm='log')
 
     estimate = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(fft_masked), norm='ortho'))
-    estimate /= np.sqrt(scc_reference)
+
+    if scc_reference is not None:
+        estimate /= np.sqrt(scc_reference)
+    else:
+        estimate *= np.sqrt(image_unmod.max()) / estimate.max()
 
     if plot:
         plt.figure(figsize=(15, 4))
@@ -69,19 +73,13 @@ def take_measurement(I, scc_reference, shift, diam_window, plot=False):
 
     return estimate
 
-
-def sussy_calibrate(
-        I, 
-        control_mask, 
-        calibration_amplitude, 
-        calibration_modes, 
-        scc_reference,
-        shift,
-        diam_window,
-        channel=3,
-        return_full_response=False,
-    ):
-
+def grab_image_cubes(I, 
+                     control_mask, 
+                     calibration_amplitude, 
+                     calibration_modes, 
+                     channel=3,
+                     ):
+    
     print('Calibrating Jacobian...')
 
     Nmask = int(control_mask.sum())
@@ -129,10 +127,27 @@ def sussy_calibrate(
         print(f"\tSnapped unmodulated images of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
         print("\r", end="")
 
+    return ims_mod, ims_unmod
+
+def calc_jacobian(ims_mod,
+                  ims_unmod, 
+                  control_mask, 
+                  calibration_amplitude, 
+                  calibration_modes, 
+                  scc_reference,
+                  shift,
+                  diam_window,
+                  return_full_response=False,
+                  ):
+    
+    Nmask = int(control_mask.sum())
+    Nmodes = calibration_modes.shape[0]
+    calib_amps = xp.array([-calibration_amplitude, calibration_amplitude])
+
     response_matrix = xp.zeros((2 * Nmask, Nmodes))
 
     if return_full_response:
-        response_matrix_full = xp.zeros((2 * I.ncamsci ** 2, Nmodes))
+        response_matrix_full = xp.zeros((2 * ims_mod.shape[0] ** 2, Nmodes))
 
     for i in range(Nmodes):
 
@@ -166,14 +181,34 @@ def sussy_calibrate(
         if return_full_response:
             response_matrix_full[::2, i] = response.ravel().real
             response_matrix_full[1::2, i] = response.ravel().imag
-
-        print(f"\tCalculated response of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
-        print("\r", end="")
     
     if return_full_response:
         return response_matrix, response_matrix_full
     else:
         return response_matrix
+
+def sussy_calibrate(
+        I, 
+        control_mask, 
+        calibration_amplitude, 
+        calibration_modes, 
+        scc_reference,
+        shift,
+        diam_window,
+        channel=3,
+        return_full_response=False,
+    ):
+
+    ims_mod, ims_unmod = grab_image_cubes(I, control_mask, calibration_amplitude, calibration_modes, channel=channel)
+    
+    if return_full_response:
+        response_mat, response_mat_full = calc_jacobian(ims_mod, ims_unmod, control_mask, calibration_amplitude, calibration_modes, 
+                                                        scc_reference, shift, diam_window, return_full_response=return_full_response)
+        return response_mat, response_mat_full
+    else:
+        response_mat = calc_jacobian(ims_mod, ims_unmod, control_mask, calibration_amplitude, calibration_modes, 
+                                     scc_reference, shift, diam_window, return_full_response=return_full_response)
+        return response_mat
     
     
 def calibrate(
