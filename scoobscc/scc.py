@@ -33,43 +33,97 @@ def run(data,
         num_iterations=3,
         gain=0.75, 
         leakage=0.0,
+        plot=True,
     ):
     
-    print('Running EFC...')
+    print('Running SCC...')
 
-    Nmodes = calibration_modes.shape[0]
+    Nact = calibration_modes.shape[1]
     Nmask = int(control_mask.sum())
+    Nmodes = calibration_modes.shape[0]
+    Ncamsci = camsci_stream.shape[0]
 
-    modes = calibration_modes.reshape(Nmodes, -1)
+    command = dm_stream.grab_latest() * 1e-6
 
-    command = copy.copy(data['commands'][-1])
+    modes = xp.asarray(calibration_modes.reshape(Nmodes, -1))
 
     for i in range(num_iterations):
         print(f"\tIteration {i + 1} / {num_iterations}")
 
-        estimate_vector = xp.zeros(2 * Nmask)
+        if INDIclient['stagepiezo.stagefold_pos.target'] == 0:
+            print('Pinhole is blocked, moving stagepiezo...')
+            scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=1000)
+            time.sleep(8)
 
-        estimate = take_measurement(I=I, scc_reference=scc_reference, shift=shift, diam_window=diam_window)
+        print('Taking modulated image...')
+        im_mod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
+        im_mod[im_mod < 0] = 0
+
+        print('Finished taking modulated image, moving stagepiezo...')
+        scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=-1000)
+        time.sleep(8)
+
+        print('Taking unmodulated image...')
+        im_unmod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
+        im_unmod[im_unmod < 0] = 0
+
+        data['images_mod'].append(copy.copy(im_mod))
+        data['images_unmod'].append(copy.copy(im_unmod))
+        data['commands'].append(copy.copy(command))
+        data['image_params'].append(copy.copy(im_params))
+
+        fft_mod = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(im_mod), norm='ortho'))
+        fft_unmod = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(im_unmod), norm='ortho'))
+        fft_diff = fft_mod - fft_unmod
+
+        fft_shifted = xcipy.ndimage.shift(fft_diff, shift)
+
+        x, y = xp.meshgrid(xp.linspace(-1, 1, fft_shifted.shape[0]), xp.linspace(-1, 1, fft_shifted.shape[0]))
+        r = xp.sqrt(x ** 2 + y ** 2)
+        mask = r < diam_window
+
+        fft_masked = fft_shifted * mask
+
+        estimate = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(fft_masked), norm='ortho'))
+
+        if scc_reference is not None:
+            estimate /= np.sqrt(scc_reference)
+        else:
+            estimate *= np.sqrt(im_unmod[control_mask].max()) / estimate[control_mask].max()
+
+        if plot:
+            plt.figure(figsize=(15, 4))
+            plt.subplot(131)
+            plt.imshow(utils.ensure_np_array(im_unmod), norm='log', cmap='magma', vmin=1e-7, vmax=1e-3)
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.title(f'Unmod Image, Contrast: {np.mean(im_unmod[control_mask]):.2e}')
+            plt.subplot(132)
+            plt.imshow(utils.ensure_np_array(xp.abs(estimate) ** 2), norm='log', cmap='magma', vmin=1e-7, vmax=1e-3)
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.title('SCC Estimate')
+            plt.subplot(133)
+            plt.imshow(utils.ensure_np_array(command), cmap='RdBu')
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.title('DM Command')
+            plt.show()
+        
+        estimate_vector = xp.zeros(2 * Nmask)
         estimate_vector[::2] = estimate[control_mask].ravel().real
         estimate_vector[1::2] = estimate[control_mask].ravel().imag
 
         del_modes = control_matrix.dot(estimate_vector)
 
-        del_command = gain * del_modes.dot(modes).reshape(I.Nact, I.Nact)
+        del_command = gain * del_modes.dot(modes).reshape(Nact, Nact)
 
-        command = (1.0 - leakage) * command - del_command
+        command = (1.0 - leakage) * command - utils.ensure_np_array(del_command)
 
-        I.set_dm(command, channel=channel)
-
-        image = I.snap_camsci()
-
-        data['images'].append(copy.copy(image))
-        data['commands'].append(copy.copy(command))
+        dm_stream.write(command * 1e6)
+        time.sleep(delay)
 
     return data
 
 
-def sussy_calibrate(
+def get_calibration_cubes(
         INDIclient,
         camsci_stream, 
         dm_stream, 
@@ -78,17 +132,13 @@ def sussy_calibrate(
         calibration_modes,
         im_params,
         ref_psf_params, 
-        scc_reference,
-        shift,
-        diam_window,
         dark_frame,
         NFRAMES=10,
         delay=0.01,
         scale_factors=None, 
-        return_full_response=False,
     ):
 
-    print('Sussy Calibrating Jacobian...')
+    print('Begin Sussy Jacobian Calibration...')
 
     current_command = dm_stream.grab_latest() * 1e-6
 
@@ -111,10 +161,10 @@ def sussy_calibrate(
 
     for i, mode in enumerate(calibration_modes):
 
-        for j, amp in enumerate(calib_amps):
+        for j, calib_amp in enumerate(calib_amps):
 
             dm_mode = mode.reshape(Nact, Nact)
-            amp = calibration_amplitude * scale_factors[i] if scale_factors is not None else calibration_amplitude
+            amp = calib_amp * scale_factors[i] if scale_factors is not None else calib_amp
             dm_command = ensure_np_array(amp * dm_mode)
 
             dm_stream.write((current_command + dm_command) * 1e6)
@@ -133,10 +183,10 @@ def sussy_calibrate(
 
     for i, mode in enumerate(calibration_modes):
 
-        for j, amp in enumerate(calib_amps):
+        for j, calib_amp in enumerate(calib_amps):
 
             dm_mode = mode.reshape(Nact, Nact)
-            amp = calibration_amplitude * scale_factors[i] if scale_factors is not None else calibration_amplitude
+            amp = calib_amp * scale_factors[i] if scale_factors is not None else calib_amp
             dm_command = ensure_np_array(amp * dm_mode)
 
             dm_stream.write((current_command + dm_command) * 1e6)
@@ -149,6 +199,32 @@ def sussy_calibrate(
         print(f"\tSnapped unmodulated images of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
         print("\r", end="")
 
+    return ims_mod, ims_unmod
+
+def calc_jacobian(
+        ims_mod,
+        ims_unmod,
+        INDIclient,
+        camsci_stream, 
+        dm_stream, 
+        control_mask, 
+        calibration_amplitude, 
+        calibration_modes,
+        scc_reference,
+        shift,
+        diam_window,
+        scale_factors=None, 
+        return_full_response=False,
+    ):
+    current_command = dm_stream.grab_latest() * 1e-6
+
+    Nact = calibration_modes.shape[1]
+    Nmask = int(control_mask.sum())
+    Nmodes = calibration_modes.shape[0]
+    Ncamsci = camsci_stream.shape[0]
+
+    calib_amps = np.array([-calibration_amplitude, calibration_amplitude])
+
     response_matrix = xp.zeros((2 * Nmask, Nmodes))
 
     if return_full_response:
@@ -158,7 +234,9 @@ def sussy_calibrate(
 
         response = 0
 
-        for j, amp in enumerate(calib_amps):
+        for j, calib_amp in enumerate(calib_amps):
+
+            amp = calib_amp * scale_factors[i] if scale_factors is not None else calib_amp
 
             image_mod = xp.asarray(ims_mod[:, :, i, j])
             image_unmod = xp.asarray(ims_unmod[:, :, i, j])
@@ -176,7 +254,11 @@ def sussy_calibrate(
             fft_masked = fft_shifted * mask
 
             estimate = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(fft_masked), norm='ortho'))
-            estimate /= np.sqrt(scc_reference)
+
+            if scc_reference is not None:
+                estimate /= np.sqrt(scc_reference)
+            else:
+                estimate *= np.sqrt(image_unmod.max()) / estimate.max()
 
             response += amp * estimate / (2 * xp.var(calib_amps)) 
 
@@ -186,9 +268,6 @@ def sussy_calibrate(
         if return_full_response:
             response_matrix_full[::2, i] = response.ravel().real
             response_matrix_full[1::2, i] = response.ravel().imag
-
-        print(f"\tCalculated response of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
-        print("\r", end="")
     
     if return_full_response:
         return response_matrix, response_matrix_full
