@@ -123,6 +123,98 @@ def run(data,
     return data
 
 
+def run_int(data,
+        INDIclient,
+        camsci_stream, 
+        dm_stream, 
+        control_matrix,
+        calibration_modes,
+        control_mask,
+        scc_reference,
+        im_params,
+        ref_psf_params, 
+        dark_frame, 
+        NFRAMES=10, 
+        delay=0.01,
+        num_iterations=3,
+        gain=0.75, 
+        leakage=0.0,
+        plot=True,
+    ):
+    
+    print('Running SCC...')
+
+    Nact = calibration_modes.shape[1]
+    Nmask = int(control_mask.sum())
+    Nmodes = calibration_modes.shape[0]
+    Ncamsci = camsci_stream.shape[0]
+
+    command = dm_stream.grab_latest() * 1e-6
+
+    modes = xp.asarray(calibration_modes.reshape(Nmodes, -1))
+
+    for i in range(num_iterations):
+        print(f"\tIteration {i + 1} / {num_iterations}")
+
+        if INDIclient['stagepiezo.stagefold_pos.target'] == 0:
+            print('Pinhole is blocked, moving stagepiezo...')
+            scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=1000)
+            time.sleep(10)
+
+        print('Taking modulated image...')
+        im_mod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
+        im_mod[im_mod < 0] = 0
+
+        print('Finished taking modulated image, moving stagepiezo...')
+        scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=-1000)
+        time.sleep(10)
+
+        print('Taking unmodulated image...')
+        im_unmod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
+        im_unmod[im_unmod < 0] = 0
+
+        data['images_mod'].append(copy.copy(im_mod))
+        data['images_unmod'].append(copy.copy(im_unmod))
+        data['commands'].append(copy.copy(command))
+        data['image_params'].append(copy.copy(im_params))
+
+        diff_image = xp.asarray(im_mod - im_unmod)
+
+        if scc_reference is not None:
+            diff_image -= scc_reference
+
+        diff_v = xp.max(xp.abs(xp.asarray([diff_image.min(), diff_image.max()])))
+
+        if plot:
+            plt.figure(figsize=(15, 4))
+            plt.subplot(131)
+            plt.imshow(utils.ensure_np_array(im_unmod), norm='log', cmap='magma', vmin=1e-7, vmax=1e-3)
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.title(f'Unmod Image, Contrast: {np.mean(im_unmod[control_mask]):.2e}')
+            plt.subplot(132)
+            plt.imshow(utils.ensure_np_array(diff_image) * utils.ensure_np_array(control_mask), cmap='RdBu', vmin=-diff_v, vmax=diff_v)
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.title('Difference Image')
+            plt.subplot(133)
+            plt.imshow(utils.ensure_np_array(command), cmap='RdBu')
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.title('DM Command')
+            plt.show()
+        
+        estimate_vector = diff_image[control_mask].ravel()
+
+        del_modes = control_matrix.dot(estimate_vector)
+
+        del_command = gain * del_modes.dot(modes).reshape(Nact, Nact)
+
+        command = (1.0 - leakage) * command - utils.ensure_np_array(del_command)
+
+        dm_stream.write(command * 1e6)
+        time.sleep(delay)
+
+    return data
+
+
 def get_calibration_cubes(
         INDIclient,
         camsci_stream, 
@@ -273,7 +365,58 @@ def calc_jacobian(
         return response_matrix, response_matrix_full
     else:
         return response_matrix
+    
 
+def calc_jacobian_int(
+        ims_mod,
+        ims_unmod,
+        camsci_stream, 
+        control_mask, 
+        calibration_amplitude, 
+        calibration_modes,
+        scc_reference,
+        scale_factors=None, 
+        return_full_response=False,
+    ):
+
+    Nmask = int(control_mask.sum())
+    Nmodes = calibration_modes.shape[0]
+    Ncamsci = camsci_stream.shape[0]
+
+    calib_amps = np.array([-calibration_amplitude, calibration_amplitude])
+
+    response_matrix = xp.zeros((Nmask, Nmodes))
+
+    if return_full_response:
+        response_matrix_full = xp.zeros((Ncamsci ** 2, Nmodes))
+
+    for i in range(Nmodes):
+
+        response = 0
+
+        for j, calib_amp in enumerate(calib_amps):
+
+            amp = calib_amp * scale_factors[i] if scale_factors is not None else calib_amp
+
+            image_mod = xp.asarray(ims_mod[:, :, i, j])
+            image_unmod = xp.asarray(ims_unmod[:, :, i, j])
+
+            diff_image = image_mod - image_unmod 
+
+            if scc_reference is not None:
+                diff_image -= scc_reference
+
+            response += amp * diff_image / (2 * xp.var(calib_amps)) 
+
+        response_matrix[:, i] = response[control_mask].ravel()
+        
+        if return_full_response:
+            response_matrix_full[:, i] = response.ravel()
+    
+    if return_full_response:
+        return response_matrix, response_matrix_full
+    else:
+        return response_matrix
 
 
 def compute_hadamard_scale_factors(had_modes, scale_exp=1/6, scale_thresh=4, iwa=2.5, owa=13, oversamp=4, plot=False):
