@@ -156,18 +156,18 @@ def run_int(data,
     for i in range(num_iterations):
         print(f"\tIteration {i + 1} / {num_iterations}")
 
-        if INDIclient['stagepiezo.stagefold_pos.target'] == 0:
+        if INDIclient['stagepiezo.stagefold_pos.target'] == -1000:
             print('Pinhole is blocked, moving stagepiezo...')
-            scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=1000)
-            time.sleep(10)
+            scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=5000)
+            time.sleep(15)
 
         print('Taking modulated image...')
         im_mod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
         im_mod[im_mod < 0] = 0
 
         print('Finished taking modulated image, moving stagepiezo...')
-        scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=-1000)
-        time.sleep(10)
+        scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=-5000)
+        time.sleep(15)
 
         print('Taking unmodulated image...')
         im_unmod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
@@ -178,17 +178,14 @@ def run_int(data,
         data['commands'].append(copy.copy(command))
         data['image_params'].append(copy.copy(im_params))
 
-        diff_image = xp.asarray(im_mod - im_unmod)
+        diff_image = xp.asarray(im_mod - im_unmod - scc_reference)
 
-        if scc_reference is not None:
-            diff_image -= scc_reference
-
-        diff_v = xp.max(xp.abs(xp.asarray([diff_image.min(), diff_image.max()])))
+        diff_v = xp.max(xp.abs(xp.asarray([diff_image.min(), diff_image.max()]))) * 0.5
 
         if plot:
             plt.figure(figsize=(15, 4))
             plt.subplot(131)
-            plt.imshow(utils.ensure_np_array(im_unmod), norm='log', cmap='magma', vmin=1e-7, vmax=1e-3)
+            plt.imshow(utils.ensure_np_array(im_unmod), norm='log', cmap='magma', vmin=1e-8, vmax=1e-4)
             plt.colorbar(fraction=0.046, pad=0.04)
             plt.title(f'Unmod Image, Contrast: {np.mean(im_unmod[control_mask]):.2e}')
             plt.subplot(132)
@@ -207,7 +204,7 @@ def run_int(data,
 
         del_command = gain * del_modes.dot(modes).reshape(Nact, Nact)
 
-        command = (1.0 - leakage) * command - utils.ensure_np_array(del_command)
+        command = (1.0 - leakage) * command + utils.ensure_np_array(del_command)
 
         dm_stream.write(command * 1e6)
         time.sleep(delay)
@@ -239,6 +236,8 @@ def get_calibration_cubes(
     Nmodes = calibration_modes.shape[0]
     Ncamsci = camsci_stream.shape[0]
 
+    max_count = 0
+
     calib_amps = np.array([-calibration_amplitude, calibration_amplitude])
 
     ims_mod = np.zeros((Ncamsci, Ncamsci, Nmodes, 2))
@@ -266,6 +265,9 @@ def get_calibration_cubes(
             im[im < 0] = 0
             ims_mod[:, :, i, j] = im
 
+            if im.max() > max_count:
+                max_count = im.max()
+
         print(f"\tSnapped modulated images of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
         print("\r", end="")
 
@@ -287,6 +289,9 @@ def get_calibration_cubes(
             im = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
             im[im < 0] = 0
             ims_unmod[:, :, i, j] = im
+
+            if im.max() > max_count:
+                max_count = im.max()
 
         print(f"\tSnapped unmodulated images of mode {i + 1:d}/{calibration_modes.shape[0]:d} in {time.time()-start:.3f}s", end='')
         print("\r", end="")
