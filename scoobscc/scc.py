@@ -159,7 +159,7 @@ def run_int(data,
         if INDIclient['stagepiezo.stagefold_pos.target'] == -1000:
             print('Pinhole is blocked, moving stagepiezo...')
             scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=5000)
-            time.sleep(15)
+            time.sleep(20)
 
         print('Taking modulated image...')
         im_mod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
@@ -167,7 +167,7 @@ def run_int(data,
 
         print('Finished taking modulated image, moving stagepiezo...')
         scoobpy.utils.move_relative(client=INDIclient, device='stagepiezo.stagefold_pos', val=-5000)
-        time.sleep(15)
+        time.sleep(20)
 
         print('Taking unmodulated image...')
         im_unmod = scoobi.snap(camsci_stream, NFRAMES, dark_frame, im_params, ref_psf_params)
