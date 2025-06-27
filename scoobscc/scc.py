@@ -134,6 +134,8 @@ def run_int(data,
         im_params,
         ref_psf_params, 
         dark_frame, 
+        filter=None,
+        beta=2,
         NFRAMES=10, 
         delay=0.01,
         num_iterations=3,
@@ -177,8 +179,19 @@ def run_int(data,
         data['images_unmod'].append(copy.copy(im_unmod))
         data['commands'].append(copy.copy(command))
         data['image_params'].append(copy.copy(im_params))
+        data['beta'].append(copy.copy(beta))
+        data['nframes'].append(copy.copy(NFRAMES))
+        data['gain'].append(copy.copy(gain))
+        data['leakage'].append(copy.copy(leakage))
 
         diff_image = xp.asarray(im_mod - im_unmod - scc_reference)
+
+        if filter is not None:
+            diff = xp.asarray(im_mod - im_unmod - scc_reference)
+            fft_diff = xp.fft.fftshift(xp.fft.ifft2(xp.fft.ifftshift(diff), norm='ortho'))
+            diff_image = xp.fft.ifftshift(xp.fft.fft2(xp.fft.fftshift(fft_diff * filter), norm='ortho')).real
+        else:
+            diff_image = xp.asarray(im_mod - im_unmod - scc_reference)
 
         diff_v = xp.max(xp.abs(xp.asarray([diff_image.min(), diff_image.max()]))) * 0.5
 
