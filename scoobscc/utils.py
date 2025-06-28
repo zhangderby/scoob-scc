@@ -462,6 +462,34 @@ def measure_waffle_center_and_angle(
 
     return xshift, yshift, mean_angle
 
+def get_centroids(
+        waffle_im, 
+        psf_pixelscale_lamD, 
+        im_thresh=1e-4, 
+        r_thresh_min=12,
+        r_thresh_max=18, 
+    ):
+    npsf = waffle_im.shape[0]
+    y,x = (xp.indices((npsf, npsf)) - npsf//2)*psf_pixelscale_lamD
+    r = xp.sqrt(x**2 + y**2)
+    waffle_mask = (waffle_im > im_thresh) * (r>r_thresh_min) * (r<r_thresh_max)
+
+    centroids = []
+    for i in [0,1]:
+        for j in [0,1]:
+            arr = waffle_im[j*npsf//2:(j+1)*npsf//2, i*npsf//2:(i+1)*npsf//2]
+            mask = waffle_mask[j*npsf//2:(j+1)*npsf//2, i*npsf//2:(i+1)*npsf//2]
+            cent = np.flip(skimage.measure.centroid(ensure_np_array(mask*arr)))
+            cent[0] += i*npsf//2
+            cent[1] += j*npsf//2
+            centroids.append(cent)
+
+    centroids.append(centroids[0])
+    centroids = np.array(centroids)
+    centroids[[2,3]] = centroids[[3,2]]
+
+    return centroids
+
 
 
 
